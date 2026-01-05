@@ -17,6 +17,11 @@
 #define FILAS 35
 #define COLUMNAS 90
 #define MAX_PLATAFORMAS 900
+#define FRAMES_correr 10
+#define FRAMES_ATTACK 3
+#define FRAMES_ESCALAR 4
+#define FRAMES_JUMP 5
+#define FRAMES_CORRER_DISPARAR 10
 
 typedef struct {
     int x, y;
@@ -29,12 +34,14 @@ typedef struct {
     int direccion;
     bool enPiso;
     bool disparando;
+    bool escaleras;
     int anim_frame;
+    int timer_anim;
     int estado;
     int hp;
     int tiempo_invencible;
     bool herido;
-    bool escaleras;
+    bool atacando;
 } Jugador;
 
 typedef struct {
@@ -71,9 +78,11 @@ typedef struct {
     bool abajo;
 } Input;
 
-Imagen *spr_idle, *spr_correr, *spr_saltar, *spr_plomazo, *spr_cubito, *bg;
+Imagen *spr_idle, *spr_plomazo, *spr_cubito, *bg;
 Imagen *spr_escalera, *spr_espinas, *spr_puerta, *spr_pasto, *spr_tierra, *spr_cajra;
 Imagen *spr_enemigo;
+Imagen *spr_correr[FRAMES_correr], *spr_atacar[FRAMES_ATTACK], *spr_escalar[FRAMES_ESCALAR], *spr_saltar[FRAMES_JUMP], *spr_correr_atacar[FRAMES_CORRER_DISPARAR];
+
 
 Jugador mega;
 Bala balas[MAX_BALAS];
@@ -89,6 +98,7 @@ void cargar();
 void cargarNivel();
 void Etrada_teclas();
 void Fisicas();
+void controlarAnimacion();
 void actualizarEnemigos();
 void enemigoDisparar(Enemigo *e);
 void actualizarBalasEnemigas();
@@ -171,18 +181,18 @@ char mapa_nivel[FILAS][COLUMNAS + 1] = {
         "...........................................................H",
         "......................E.......................E............H",
         "...........................................................H",
-        "...................####........####........................H",
+        "..................###### .......####........................H",
         "###################....########....########################H",
 
-        "...........................................................H",
-        "...........................................................H",
-        "...........................................................H",
+        "..........................................................H#",
+        "..........................................................H#",
+        "..........................................................H#",
 
-        "P..........................................................H",
-        ".........................................E.................H",
-        "...........................................................H",
-        "#####...^^^...#####...^^^...#####..........................H",
-        "#...#.........#...#.........#...#..........................H",
+        "P.........................................................H#",
+        ".........................................E................H#",
+        "..........................................................H#",
+        "#####...^^^...#####...^^^...#####.........................H#",
+        "#...#.........#...#.........#...#.........................H#",
         "############################################################"
 };
 
@@ -194,7 +204,14 @@ void Etrada_teclas() {
         if (t_down == TECLAS.IZQUIERDA) controles.izquierda = true;
         if (t_down == TECLAS.DERECHA)   controles.derecha = true;
         if (t_down == TECLAS.ESPACIO)   controles.salto = true;
-        if (t_down == 90 || t_down == 122) disparar();
+        if (t_down == 90 || t_down == 122) {
+            if (!mega.atacando) {
+                mega.atacando = true;
+                mega.anim_frame = 0;
+                mega.timer_anim = 0;
+                disparar();
+            }
+        }
         t_down = ventana.teclaPresionada();
     }
 
@@ -209,64 +226,83 @@ void Etrada_teclas() {
     }
 }
 
+void controlarAnimacion() {
+    mega.timer_anim++;
+    int velocidad_anim = 6;
+    int limite_frames = 0;
+
+    if (mega.atacando) {
+        if (mega.enPiso && mega.vx != 0) {
+            mega.estado = 5;
+            limite_frames = FRAMES_CORRER_DISPARAR;
+            velocidad_anim = 5;
+        }
+        else {
+            mega.estado = 4;
+            limite_frames = FRAMES_ATTACK;
+            velocidad_anim = 4;
+        }
+    }
+    else if (mega.escaleras) {
+        mega.estado = 3;
+        limite_frames = FRAMES_ESCALAR;
+        if (mega.vy == 0) mega.timer_anim = 0;
+    }
+    else if (!mega.enPiso) {
+        mega.estado = 2;
+        limite_frames = FRAMES_JUMP;
+    }
+    else if (mega.vx != 0) {
+        mega.estado = 1;
+        limite_frames = FRAMES_correr;
+    }
+    else {
+        mega.estado = 0;
+        mega.anim_frame = 0;
+    }
+
+    if (limite_frames > 0 && mega.timer_anim >= velocidad_anim) {
+        mega.anim_frame++;
+        mega.timer_anim = 0;
+        if (mega.anim_frame >= limite_frames) {
+            mega.anim_frame = 0;
+            if (mega.estado == 4 || mega.estado == 5) {
+                mega.atacando = false;
+            }
+        }
+    }
+}
+
 void Fisicas() {
     if (controles.derecha && !controles.izquierda) {
         mega.vx = VELOCIDAD_MOV;
         mega.direccion = 1;
-        mega.estado = 1;
     } else if (controles.izquierda && !controles.derecha) {
         mega.vx = -VELOCIDAD_MOV;
         mega.direccion = -1;
-        mega.estado = 1;
     } else {
         mega.vx = 0;
-        mega.estado = 0;
     }
 
     if (mega.escaleras && controles.salto) {
         mega.escaleras = false;
-        mega.vy = -10;
+        mega.vy = FUERZA_SALTO;
     }
 
+    int tileX = (int)(mega.x + 25) / TILE_SIZE;
+    int tileY = (int)(mega.y + 25) / TILE_SIZE;
     bool tocandoEscalera = false;
-    int tileX = (mega.x + 25) / TILE_SIZE;
-    int tileY = (mega.y + 25) / TILE_SIZE;
 
     if (tileX >= 0 && tileX < COLUMNAS && tileY >= 0 && tileY < FILAS) {
-        if (mapa_nivel[tileY][tileX] == 'H') tocandoEscalera = true;
+        if (mapa_nivel[tileY][tileX] == 'H') {
+            tocandoEscalera = true;
+        }
     }
 
     if (tocandoEscalera) {
-        if (controles.arriba) {
-            mega.escaleras = true;
-            mega.vy = -4;
-            mega.vx = 0;
-        } else if (controles.abajo) {
-            mega.escaleras = true;
-            mega.vy = 4;
-            mega.vx = 0;
-        } else if (mega.escaleras) {
-            mega.vy = 0;
-            mega.vx = 0;
-        }
-
-        if (tocandoEscalera) {
-            if (controles.arriba) {
-                mega.escaleras = true;
-                mega.vy = -4;
-                mega.vx = 0;
-            } else if (controles.abajo) {
-                mega.escaleras = true;
-                mega.vy = 4;
-                mega.vx = 0;
-            } else if (mega.escaleras) {
-                mega.vy = 0;
-                mega.vx = 0;
-            }
-        } else {
-            mega.escaleras = false;
-        }
-
+        if (controles.arriba) { mega.escaleras = true; mega.vy = -4; mega.vx = 0; }
+        else if (controles.abajo) { mega.escaleras = true; mega.vy = 4; mega.vx = 0; }
+        else if (mega.escaleras) { mega.vy = 0; mega.vx = 0; }
     } else {
         mega.escaleras = false;
     }
@@ -277,9 +313,7 @@ void Fisicas() {
         controles.salto = false;
     }
 
-    if (!mega.escaleras) {
-        mega.vy += GRAVEDAD;
-    }
+    if (!mega.escaleras) mega.vy += GRAVEDAD;
 
     mega.x += mega.vx;
     mega.y += mega.vy;
@@ -288,7 +322,6 @@ void Fisicas() {
     Rect rMega = {(int)mega.x, (int)mega.y, 50, 50};
     for(int i=0; i<num_plataformas; i++) {
         if (choco(rMega, plataformas[i])) {
-
             if (mega.vy > 0 && (mega.y - mega.vy) + 50 <= plataformas[i].y + 20) {
                 mega.y = plataformas[i].y - 50;
                 mega.vy = 0;
@@ -298,22 +331,13 @@ void Fisicas() {
         }
     }
 
-    if (mega.y > (FILAS * TILE_SIZE) + 100) {
-        printf("Caiste al vacio!\n");
-        cargarNivel();
-    }
+    controlarAnimacion();
 
-    if (!mega.enPiso && !mega.escaleras) mega.estado = 2;
-
-    int tileY_pies = (mega.y + 45) / TILE_SIZE;
+    int tileY_pies = (int)(mega.y + 45) / TILE_SIZE;
     if(tileX >= 0 && tileX < COLUMNAS && tileY_pies >= 0 && tileY_pies < FILAS) {
-        if (mapa_nivel[tileY_pies][tileX] == '^') {
-            printf("Te moriste picado apa\n");
-            mega.hp = 0;
-        }
+        if (mapa_nivel[tileY_pies][tileX] == '^') mega.hp = 0;
     }
 }
-
 void actualizarEnemigos() {
     for(int i=0; i<MAX_ENEMIGOS; i++) {
         if (!enemigos[i].activo) continue;
@@ -524,6 +548,28 @@ void dibujarJuego() {
         }
     }
 
+    Imagen *sprite_jugador = spr_idle;
+
+    switch(mega.estado) {
+        case 1: sprite_jugador = spr_correr[mega.anim_frame]; break;
+        case 2: sprite_jugador = spr_saltar[mega.anim_frame]; break;
+        case 3: sprite_jugador = spr_escalar[mega.anim_frame]; break;
+        case 4: sprite_jugador = spr_atacar[mega.anim_frame]; break;
+        case 5: sprite_jugador = spr_correr_atacar[mega.anim_frame]; break;
+        default: sprite_jugador = spr_idle; break;
+    }
+
+    if (!mega.herido) {
+        int dx = (int)mega.x - camara_x;
+        int dy = (int)mega.y - camara_y;
+
+        if(sprite_jugador) {
+            ventana.muestraImagenEscalada(dx, dy, 50, 50, sprite_jugador);
+        } else {
+            ventana.color(COLORES.CYAN);
+            ventana.rectanguloRelleno(dx, dy, dx + 50, dy + 50);
+        }
+    }
     ventana.color(COLORES.ROJO);
     for(int i=0; i<MAX_ENEMIGOS; i++) {
         if (enemigos[i].activo) {
@@ -550,7 +596,7 @@ void dibujarJuego() {
         Imagen *sprite_actual = spr_idle;
         if (mega.estado == 1) sprite_actual = spr_correr;
         if (mega.estado == 2) sprite_actual = spr_saltar;
-        if (mega.escaleras) sprite_actual = spr_escalera;
+        if (mega.escaleras) sprite_actual = spr_escalar;
 
         int drawX = (int)mega.x - camara_x;
         int drawY = (int)mega.y - camara_y;
@@ -645,21 +691,41 @@ void cargarNivel() {
 }
 
 void cargar() {
-    spr_idle = ventana.creaImagenConMascara("megaman_idle.bmp", "mask_idle.bmp");
-    spr_correr  = ventana.creaImagenConMascara("megaman_correr.bmp", "mask_correr.bmp");
-    spr_saltar = ventana.creaImagenConMascara("megaman_saltar.bmp", "mask_saltar.bmp");
+    char path[50], mask[50];
+    for(int i=0; i<FRAMES_correr; i++) {
+        sprintf(path, "correr_%d.bmp", i); sprintf(mask, "correr_%d_mask.bmp", i);
+        spr_correr[i] = ventana.creaImagenConMascara(path, mask);
+    }
+    for(int i=0; i<FRAMES_ATTACK; i++) {
+        sprintf(path, "atacar_%d.bmp", i); sprintf(mask, "atacar_%d_mask.bmp", i);
+        spr_atacar[i] = ventana.creaImagenConMascara(path, mask);
+        if (spr_atacar == NULL) {
+            printf("No esta cargando el ataque");
+        }
+    }
+    for(int i=0; i<FRAMES_ESCALAR; i++) {
+        sprintf(path, "escalar_%d.bmp", i); sprintf(mask, "escalar_%d_mask.bmp", i);
+        spr_escalar[i] = ventana.creaImagenConMascara(path, mask);
+    }
+    for(int i=0; i<FRAMES_JUMP; i++) {
+        sprintf(path, "salto_%d.bmp", i); sprintf(mask, "salto_%d_mask.bmp", i);
+        spr_saltar[i] = ventana.creaImagenConMascara(path, mask);
+    }
+    for (int i=0; i<FRAMES_CORRER_DISPARAR; i++) {
+        sprintf(path, "correr_ataque_%d.bmp", i); sprintf(mask, "correr_ataque_%d_mask.bmp", i);
+        spr_correr_atacar[i] = ventana.creaImagenConMascara(path, mask);
+    }
+
+    spr_idle = ventana.creaImagenConMascara("megaman.bmp", "megaman_mask.bmp");
     spr_plomazo = ventana.creaImagenConMascara("plomazo.bmp", "mask_plomazo.bmp");
-    spr_cubito = ventana.creaImagen("cubito.bmp");
     spr_enemigo = ventana.creaImagenConMascara("enemy.bmp", "mask_enemy.bmp");
     bg = ventana.creaImagen("bg_future.bmp");
-    spr_pasto = ventana.creaImagen("tile_pasto.bmp");
-    spr_tierra  = ventana.creaImagen("tile_tierra.bmp");
-    spr_cajra = ventana.creaImagen("tile_cajra.bmp");
-    spr_espinas = ventana.creaImagen("tile_espinas.bmp");
-    spr_escalera = ventana.creaImagen("tile_escalera.bmp");
+    spr_cubito = ventana.creaImagen("cubito.bmp");
+    spr_pasto = ventana.creaImagen("pasto.bmp");
+    spr_tierra = ventana.creaImagen("tierra.bmp");
+    spr_espinas = ventana.creaImagen("espinitas.bmp");
+    spr_escalera = ventana.creaImagen("escalera.bmp");
     spr_puerta = ventana.creaImagen("tile_puerta.bmp");
-
-    if (!spr_cubito) printf("Error al cargar las imagens, usando graficos simples");
 }
 
 bool choco(Rect a, Rect b) {
